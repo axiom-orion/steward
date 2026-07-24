@@ -1,0 +1,5 @@
+__pycache__/
+*.egg-info/
+.venv/
+steward-ledger.jsonl
+.pytest_cache/
