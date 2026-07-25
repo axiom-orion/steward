@@ -3,3 +3,5 @@ __pycache__/
 .venv/
 steward-ledger.jsonl
 .pytest_cache/
+SPRINT.md
+.env
