@@ -43,7 +43,10 @@ class DataHubMCP:
         return await self.call("list_schema_fields", {"urn": urn})
 
     async def update_description(self, urn: str, description: str) -> Any:
-        return await self.call("update_description", {"urn": urn, "description": description})
+        return await self.call(
+            "update_description",
+            {"entity_urn": urn, "operation": "replace", "description": description},
+        )
 
 
 @asynccontextmanager
