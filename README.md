@@ -48,10 +48,36 @@ steward scan                             # find debt (read-only, no API key need
 steward scan --kinds tag_drift           # one detector at a time
 steward fix                              # propose + judge, DRY RUN — nothing is written
 steward fix --kinds missing_owner --max-findings 10
+steward review                           # decisions the gate declined to make alone
 STEWARD_MUTATIONS=true steward fix --apply    # perform judge-approved writes
 ```
 
 Detectors: `missing_description`, `missing_owner`, `missing_domain`, `tag_drift`.
+
+### The confidence floor
+
+A verdict below `STEWARD_CONFIDENCE_FLOOR` (default 0.70) is not acted on in
+either direction — it is **held** and listed by `steward review`.
+
+Two-sided is the point. Gating only approvals is the obvious design and it is
+the wrong one: on the labeled eval set, the single case the judge got wrong was
+a low-confidence *refusal*, and a one-sided floor would have waved it through as
+a safe-looking "no" while quietly leaving real debt unfixed. Live, against the
+showcase pack:
+
+```
+[APPROVED 0.88] missing_domain addresses    -> written
+[APPROVED 0.90] missing_domain countries    -> written
+[APPROVED 0.82] missing_domain customers    -> written
+[APPROVED 0.86] missing_domain inventories  -> written
+[APPROVED 0.78] missing_domain order_items  -> written
+[HELD     0.62] missing_domain orders       -> left for a human
+```
+
+`orders` is the case the eval flagged: the judge refuses a team-named domain on
+a commercial table while accepting it for reference tables. Rather than tune the
+prompt until that disagreement disappears, the floor routes it to the person who
+should be settling it. Set `--floor 0` to restore raw judge behaviour.
 
 `fix` needs `ANTHROPIC_API_KEY` (or an `ant auth login` profile). Writes require two locks:
 the `--apply` flag *and* `STEWARD_MUTATIONS=true`.

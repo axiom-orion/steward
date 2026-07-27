@@ -12,6 +12,7 @@ from evals.audit_ledger import audit
 from steward.corpus import Dataset
 from steward.detectors import Finding
 from steward.judge import JudgeError, Verdict, judge
+from steward.policy import APPLY, HOLD, REFUSE, decide
 from steward.remedy import Action, Proposal
 
 URN = "urn:li:dataset:(urn:li:dataPlatform:snowflake,pack.db.orders,PROD)"
@@ -57,6 +58,51 @@ class TestLedgerAudit:
         violations, _ = audit(_ledger(tmp_path, _decided(True), _applied(OTHER_ACTIONS)))
         assert len(violations) == 1
         assert "DIFFERENT WRITE" in violations[0]
+
+
+class TestConfidenceFloor:
+    def test_confident_verdicts_are_acted_on(self):
+        assert decide(True, 0.9).action == APPLY
+        assert decide(False, 0.9).action == REFUSE
+
+    def test_unconfident_approval_is_held(self):
+        assert decide(True, 0.61).action == HOLD
+
+    def test_unconfident_refusal_is_also_held(self):
+        """The floor is two-sided on purpose. The one case the judge got wrong
+        on the eval set was a low-confidence refusal, so gating approvals alone
+        would have let it through as a safe-looking no."""
+        held = decide(False, 0.61)
+        assert held.action == HOLD
+        assert "refusal" in held.reason
+
+    def test_the_boundary_is_inclusive_of_the_floor(self):
+        assert decide(True, 0.7, floor=0.7).action == APPLY
+        assert decide(True, 0.6999, floor=0.7).action == HOLD
+
+    def test_a_zero_floor_restores_raw_judge_behaviour(self):
+        assert decide(True, 0.1, floor=0.0).action == APPLY
+        assert decide(False, 0.1, floor=0.0).action == REFUSE
+
+
+class TestHeldWritesAreNotAuthorized:
+    def test_a_held_decision_does_not_license_a_write(self, tmp_path):
+        """A hold can carry approved=true; it must still not authorize."""
+        decided = {**_decided(True), "disposition": "hold"}
+        violations, summary = audit(_ledger(tmp_path, decided, _applied()))
+        assert len(violations) == 1
+        assert "HELD" in violations[0]
+        assert summary["held"] == 1
+
+    def test_disposition_apply_authorizes(self, tmp_path):
+        decided = {**_decided(True), "disposition": "apply"}
+        violations, _ = audit(_ledger(tmp_path, decided, _applied()))
+        assert violations == []
+
+    def test_records_without_a_disposition_still_audit(self, tmp_path):
+        """Ledger lines written before the floor existed must keep auditing."""
+        violations, _ = audit(_ledger(tmp_path, _decided(True), _applied()))
+        assert violations == []
 
 
 class TestJudgeFailsClosed:

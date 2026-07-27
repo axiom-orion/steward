@@ -24,6 +24,7 @@ def audit(path: Path) -> tuple[list[str], dict]:
     # for a different write against the same dataset.
     approved: set[tuple] = set()
     refused: set[tuple] = set()
+    held: set[tuple] = set()
     counts: defaultdict[str, int] = defaultdict(int)
     violations: list[str] = []
 
@@ -37,12 +38,21 @@ def audit(path: Path) -> tuple[list[str], dict]:
 
         if event == "decided":
             verdict = rec.get("verdict") or {}
-            (approved if verdict.get("approved") else refused).add((*key_base, actions))
+            # Authorization comes from the disposition, not the raw verdict: a
+            # held decision can carry approved=true and still must not license a
+            # write. Older records predate dispositions, so fall back.
+            disposition = rec.get("disposition")
+            authorized = (disposition == "apply") if disposition else verdict.get("approved")
+            if disposition == "hold":
+                held.add((*key_base, actions))
+            (approved if authorized else refused).add((*key_base, actions))
         elif event == "applied":
             key = (*key_base, actions)
             if key in approved:
                 continue
-            if key in refused:
+            if key in held:
+                violations.append(f"APPLIED A HELD WRITE: {key_base[0]} on {key_base[1]}")
+            elif key in refused:
                 violations.append(f"APPLIED A REFUSED WRITE: {key_base[0]} on {key_base[1]}")
             elif any(a[:2] == key_base for a in approved):
                 violations.append(
@@ -55,7 +65,8 @@ def audit(path: Path) -> tuple[list[str], dict]:
         "records": len(records),
         "decided": counts["decided"],
         "approved": len(approved),
-        "refused": len(refused),
+        "refused": len(refused - held),
+        "held": len(held),
         "applied": counts["applied"],
         "apply_failed": counts["apply_failed"],
         "judge_failed": counts["judge_failed"],

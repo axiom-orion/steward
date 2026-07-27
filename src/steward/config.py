@@ -32,6 +32,11 @@ class Config:
         )
     )
     ledger_path: str = field(default_factory=lambda: os.environ.get("STEWARD_LEDGER", "steward-ledger.jsonl"))
+    # Verdicts below this confidence are held for a human instead of acted on,
+    # in either direction. 0 disables holding. See policy.py.
+    confidence_floor: float = field(
+        default_factory=lambda: float(os.environ.get("STEWARD_CONFIDENCE_FLOOR", "0.7"))
+    )
     # Mutations stay off unless explicitly enabled AND --apply is passed. Two locks.
     mutations_enabled: bool = field(
         default_factory=lambda: os.environ.get("STEWARD_MUTATIONS", "") == "true"

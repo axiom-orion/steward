@@ -8,6 +8,7 @@ fix:  propose + judge each finding. Dry-run by default; --apply performs the
 
 import argparse
 import asyncio
+import json
 import sys
 from collections import Counter
 
@@ -16,6 +17,7 @@ from .corpus import fetch_corpus, find_twins
 from .detectors import KINDS, Finding, scan_dataset
 from .ledger import Ledger
 from .mcp import connect, execute
+from .policy import APPLY, HOLD, REFUSE, decide
 from .remedy import Proposal, propose
 
 
@@ -97,16 +99,24 @@ async def cmd_fix(cfg: Config, args: argparse.Namespace) -> int:
             _note(f"JUDGE-FAILED {f.entity_name}: {err}")
             tally[f"{f.kind}:judge_failed"] += 1
             continue
+
+        disposition = decide(verdict.approved, verdict.confidence, args.floor)
         ledger.write(
             "decided", f,
             proposal=proposal.to_dict(),
             verdict=verdict.model_dump(),
+            disposition=disposition.action,
+            disposition_reason=disposition.reason,
+            confidence_floor=args.floor,
             mode="apply" if args.apply else "dry-run",
         )
-        mark = "APPROVED" if verdict.approved else "REJECTED"
-        tally[f"{f.kind}:{'approved' if verdict.approved else 'rejected'}"] += 1
+        mark = {APPLY: "APPROVED", REFUSE: "REJECTED", HOLD: "HELD    "}[disposition.action]
+        tally[f"{f.kind}:{disposition.action}"] += 1
         print(f"[{mark} {verdict.confidence:.2f}] {f.kind} {f.entity_name}: {proposal.summary[:110]}")
-        if not verdict.approved:
+        if disposition.held:
+            print(f"    held: {disposition.reason}")
+            print(f"    judge: {verdict.rationale[:220]}")
+        elif not verdict.approved:
             print(f"    judge: {verdict.rationale[:220]}")
         else:
             approved.append((f, proposal))
@@ -136,6 +146,43 @@ async def cmd_fix(cfg: Config, args: argparse.Namespace) -> int:
     return 0
 
 
+async def cmd_review(cfg: Config, args: argparse.Namespace) -> int:
+    """Everything the gate declined to decide on its own.
+
+    A floor that only suppresses writes moves work out of sight; this is where
+    it lands. Latest decision per finding wins, so a held item that a later run
+    resolved confidently drops off the list."""
+    ledger = Ledger(cfg.ledger_path)
+    latest: dict[tuple, dict] = {}
+    for rec in ledger.read_all():
+        if rec.get("event") != "decided":
+            continue
+        finding = rec.get("finding") or {}
+        latest[(finding.get("kind"), finding.get("urn"),
+                json.dumps((rec.get("proposal") or {}).get("actions"), sort_keys=True))] = rec
+
+    held = [r for r in latest.values() if r.get("disposition") == HOLD]
+    if not held:
+        _note("nothing held for review.")
+        return 0
+
+    held.sort(key=lambda r: (r["finding"]["kind"], (r.get("verdict") or {}).get("confidence", 0)))
+    for rec in held:
+        finding, verdict = rec["finding"], rec.get("verdict") or {}
+        proposal = rec.get("proposal") or {}
+        leaning = "would approve" if verdict.get("approved") else "would refuse"
+        print(f"\n[{finding['kind']}] {finding['entity_name']}  "
+              f"({verdict.get('confidence', 0):.2f}, {leaning})")
+        print(f"  urn:      {finding['urn']}")
+        print(f"  proposal: {proposal.get('summary', '')}")
+        print(f"  judge:    {verdict.get('rationale', '')[:400]}")
+        for action in proposal.get("actions") or []:
+            print(f"  write:    {action['tool']}({action['args']})")
+    _note(f"\n{len(held)} held for review "
+          f"(floor {cfg.confidence_floor:.2f}; re-run fix with --floor 0 to act on them anyway).")
+    return 0
+
+
 def _kinds(value: str) -> list[str]:
     chosen = [k.strip() for k in value.split(",") if k.strip()]
     unknown = [k for k in chosen if k not in KINDS]
@@ -156,10 +203,16 @@ def main() -> None:
         if name == "fix":
             p.add_argument("--max-findings", type=int, default=0, help="cap findings judged (0 = all)")
             p.add_argument("--apply", action="store_true")
+            p.add_argument("--floor", type=float, default=None,
+                           help="hold verdicts below this confidence, either direction "
+                                "(default STEWARD_CONFIDENCE_FLOOR, 0 disables)")
+    sub.add_parser("review", help="show decisions held for a human")
     args = parser.parse_args()
 
     cfg = Config()
-    handler = {"scan": cmd_scan, "fix": cmd_fix}[args.command]
+    if getattr(args, "floor", None) is None:
+        args.floor = cfg.confidence_floor
+    handler = {"scan": cmd_scan, "fix": cmd_fix, "review": cmd_review}[args.command]
     sys.exit(asyncio.run(handler(cfg, args)))
 
 
