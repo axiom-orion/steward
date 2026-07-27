@@ -86,8 +86,17 @@ async def cmd_fix(cfg: Config, args: argparse.Namespace) -> int:
             tally[f"{f.kind}:error"] += 1
             continue
 
-        from .judge import judge                        # late import: scan needs no API key
-        verdict = judge(f, proposal, cfg.model)
+        from .judge import JudgeError, judge            # late import: scan needs no API key
+
+        try:
+            verdict = judge(f, proposal, cfg.model)
+        except JudgeError as err:
+            # No verdict means no write. Recorded distinctly from a refusal so
+            # an auditor can tell "the gate said no" from "the gate never ran".
+            ledger.write("judge_failed", f, proposal=proposal.to_dict(), error=str(err)[:500])
+            _note(f"JUDGE-FAILED {f.entity_name}: {err}")
+            tally[f"{f.kind}:judge_failed"] += 1
+            continue
         ledger.write(
             "decided", f,
             proposal=proposal.to_dict(),

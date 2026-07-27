@@ -56,11 +56,52 @@ Detectors: `missing_description`, `missing_owner`, `missing_domain`, `tag_drift`
 `fix` needs `ANTHROPIC_API_KEY` (or an `ant auth login` profile). Writes require two locks:
 the `--apply` flag *and* `STEWARD_MUTATIONS=true`.
 
+## Measuring the gate
+
+A judge-gated agent is only as good as its gate, so the gate is evaluated
+separately from the agent. `evals/` replays frozen payloads from DataHub's own
+showcase pack through the real detector and remedy code, then scores the judge
+against hand-labeled answers — including proposals it is supposed to refuse.
+
+```bash
+python -m evals.run_eval --repeats 5      # needs ANTHROPIC_API_KEY, no DataHub
+python -m evals.audit_ledger steward-ledger.jsonl
+```
+
+Latest run — 8 cases, 5 judgements each:
+
+| | |
+|---|---|
+| Correct vs label | 7/8 |
+| Unanimous across 5 runs | 8/8 |
+| Bad writes refused | 4/4 |
+| Good writes allowed | 3/4 |
+| Mean confidence when right / wrong | 0.88 / 0.61 |
+
+The four refusals are the interesting half: a tag that designates *which copy is
+the system of record* (propagating it would claim two copies are authoritative),
+a per-platform profiling annotation, a fabricated twin whose claimed column
+overlap is not credible given the column names, and two copies that disagree
+about their domain with nothing to break the tie.
+
+The one miss is a real disagreement, not a crash: the judge refuses to propagate
+a domain named after a team onto an obviously commercial `orders` table, while
+accepting the same domain for a reference table. That is a defensible position
+about the *source* catalog, but it is not the question the propagation asks, and
+it makes the gate hard to predict across sibling tables. Its confidence on that
+verdict is 0.61 against 0.88 elsewhere — low confidence is a usable signal for
+routing a decision to a human.
+
+Separately, `audit_ledger` checks the property that must hold regardless of the
+judge's opinions: every applied write carries an approving verdict for that exact
+set of actions. It is what lets the agent prove after the fact, to someone who
+does not trust it, that nothing was written behind the gate's back.
+
 ## Development
 
 ```bash
 uv venv && uv pip install -e . pytest
-pytest                          # offline tests, no DataHub or API key needed
+pytest                          # 36 offline tests, no DataHub or API key needed
 ```
 
 ## Reuse disclosure

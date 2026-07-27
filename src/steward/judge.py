@@ -16,12 +16,25 @@ governance and is simply false.
 """
 
 from anthropic import Anthropic
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from .detectors import Finding
 from .remedy import Proposal
 
+# Verdicts on a contested write run long. At 2000 the JSON gets cut mid-string
+# and parsing dies, which took down a whole eval run — the gate has to be able
+# to finish its sentence.
+MAX_TOKENS = 6000
+
 _client: Anthropic | None = None
+
+
+class JudgeError(RuntimeError):
+    """The judge did not return a usable verdict.
+
+    Raised rather than converted into a rejection, so that callers distinguish
+    "the gate said no" from "the gate never answered". Both must block a write;
+    only one of them is a verdict."""
 
 
 def client() -> Anthropic:
@@ -100,10 +113,17 @@ def _render_evidence(finding: Finding) -> str:
             f"  urn: {ev['twin_urn']}",
             f"  shares {ev['shared_fields']} columns, overlap ratio {ev['field_overlap']}",
         ]
+    # URNs are rendered alongside their display names, not just the names: the
+    # judge is shown the exact write, and without the URN it cannot check that
+    # the identifier being written is the one the evidence describes. It caught
+    # this itself — "the write targets a domain URN which does not match the
+    # domain cited in the basis" — on a case where the two did in fact agree.
     for key, label in (
         ("proposed_owners", "Owners on the twin"),
         ("proposed_domain_name", "Domain on the twin"),
+        ("proposed_domain_urn", "Domain URN on the twin"),
         ("proposed_tag_name", "Tag on the twin"),
+        ("proposed_tag_urn", "Tag URN on the twin"),
         ("proposed_tag_description", "Tag definition"),
         ("current_tags", "Tags already on this dataset"),
         ("other_twins_with_owners", "Other copies with owners"),
@@ -119,7 +139,7 @@ def _render_evidence(finding: Finding) -> str:
 def draft_description(finding: Finding, model: str) -> Draft:
     response = client().messages.parse(
         model=model,
-        max_tokens=2000,
+        max_tokens=MAX_TOKENS,
         thinking={"type": "adaptive"},
         system=DRAFTER_SYSTEM,
         messages=[{
@@ -134,22 +154,28 @@ def draft_description(finding: Finding, model: str) -> Draft:
 def judge(finding: Finding, proposal: Proposal, model: str) -> Verdict:
     system = DRAFT_JUDGE_SYSTEM if proposal.origin == "drafted" else PROPAGATION_JUDGE_SYSTEM
     writes = "\n".join(f"  {a.tool}({a.args})" for a in proposal.actions)
-    response = client().messages.parse(
-        model=model,
-        max_tokens=2000,
-        thinking={"type": "adaptive"},
-        system=system,
-        messages=[{
-            "role": "user",
-            "content": (
-                f"Finding: {finding.kind}\n\n"
-                f"Evidence:\n{_render_evidence(finding)}\n\n"
-                f"Proposal: {proposal.summary}\n"
-                f"Stated basis: {proposal.basis}\n\n"
-                f"Exact writes that will be executed if you approve:\n{writes}\n\n"
-                "Should these writes be applied?"
-            ),
-        }],
-        output_format=Verdict,
-    )
+    try:
+        response = client().messages.parse(
+            model=model,
+            max_tokens=MAX_TOKENS,
+            thinking={"type": "adaptive"},
+            system=system,
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Finding: {finding.kind}\n\n"
+                    f"Evidence:\n{_render_evidence(finding)}\n\n"
+                    f"Proposal: {proposal.summary}\n"
+                    f"Stated basis: {proposal.basis}\n\n"
+                    f"Exact writes that will be executed if you approve:\n{writes}\n\n"
+                    "Should these writes be applied?"
+                ),
+            }],
+            output_format=Verdict,
+        )
+    except ValidationError as err:
+        # A verdict that does not parse is not a rejection, it is a missing
+        # verdict. Callers must still block the write, but the ledger should
+        # not record a refusal the judge never made.
+        raise JudgeError(f"unparseable verdict for {finding.kind} on {finding.urn}: {err}") from err
     return response.parsed_output
