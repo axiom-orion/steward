@@ -123,9 +123,12 @@ nothing was written behind the gate's back.
 ledger audit run with **no DataHub instance and no API key**:
 
 ```bash
-pytest                                             # offline tests — no DataHub, no API key
+pytest                                             # 44 offline tests — no DataHub, no API key
 python -m evals.audit_ledger steward-ledger.jsonl  # replays the shipped ledger, checks the invariant
 ```
+
+The ledger is committed to the repo — 72 real decision records — so that second command
+reproduces the invariant check on a fresh clone, against the same data this writeup cites.
 
 `steward scan` is read-only and needs no key either. Only `fix` calls a model, and only
 `--apply` **and** `STEWARD_MUTATIONS=true` together can write anything to a catalog.
@@ -169,7 +172,7 @@ governance layer for other DataHub agents.
 
 ```bash
 uv venv && uv pip install -e . pytest
-pytest                                             # offline tests
+pytest                                             # 44 offline tests
 python -m evals.audit_ledger steward-ledger.jsonl  # ledger invariant, against the shipped ledger
 ```
 
@@ -198,8 +201,9 @@ does not. That is the whole argument.
 ## Pre-submission checklist
 
 - [ ] Devpost form **draft-saved** (do this first, empty if necessary)
-- [ ] Repo pushed public with Apache-2.0 LICENSE at top level
-- [ ] README "36 offline tests" line — **stale**, predates the confidence-floor commit; verify actual count in the WSL env (`~/dhenv`) and correct before the repo goes public
+- [x] Repo public with Apache-2.0 LICENSE at top level — https://github.com/axiom-orion/steward
+- [x] Test count verified: **44 passing**, offline, in the `~/dhenv` WSL venv (README's "36" was stale and is corrected)
+- [x] Ledger committed so `audit_ledger` reproduces on a fresh clone
 - [ ] Video recorded, under 3:00, public link
 - [ ] Live demo reachable by judges for the full judging window
 - [ ] Submitted well before **Aug 10, 5:00 PM ET** — not at 4:59

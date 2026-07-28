@@ -94,6 +94,10 @@ python -m evals.run_eval --repeats 5      # needs ANTHROPIC_API_KEY, no DataHub
 python -m evals.audit_ledger steward-ledger.jsonl
 ```
 
+`steward-ledger.jsonl` is committed — 72 real decision records from the runs described
+below — so `audit_ledger` reproduces the invariant check on a fresh clone with no DataHub,
+no API key, and no setup beyond installing the package.
+
 Latest run — 8 cases, 5 judgements each:
 
 | | |
@@ -127,7 +131,7 @@ does not trust it, that nothing was written behind the gate's back.
 
 ```bash
 uv venv && uv pip install -e . pytest
-pytest                          # 36 offline tests, no DataHub or API key needed
+pytest                          # 44 offline tests, no DataHub or API key needed
 ```
 
 ## Reuse disclosure
