@@ -162,7 +162,7 @@ governance layer for other DataHub agents.
 
 ## Try it out
 
-- **Repo:** _(GitHub URL — repo is Apache-2.0, top-level LICENSE present)_
+- **Repo:** https://github.com/axiom-orion/steward (Apache-2.0, LICENSE at top level)
 - **OSS contribution:** https://github.com/acryldata/mcp-server-datahub/pull/148
 
 **Judges: you can verify this without standing up DataHub and without an API key.**
