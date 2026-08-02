@@ -201,6 +201,9 @@ does not. That is the whole argument.
 ## Pre-submission checklist
 
 - [ ] Devpost form **draft-saved** (do this first, empty if necessary)
+- [x] Video script written + timed — `VIDEO-SCRIPT.md`, 374 words ≈ 2:29 narration, shot list to 2:50
+- [x] Demo re-armed so the "before" state exists to film — `ops/rearm_demo.py`, 13 tag_drift findings restored
+- [x] Judge path verified on a **fresh clone**: 44 tests + ledger audit pass with no DataHub, no API key
 - [x] Repo public with Apache-2.0 LICENSE at top level — https://github.com/axiom-orion/steward
 - [x] Test count verified: **44 passing**, offline, in the `~/dhenv` WSL venv (README's "36" was stale and is corrected)
 - [x] Ledger committed so `audit_ledger` reproduces on a fresh clone
