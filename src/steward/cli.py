@@ -19,6 +19,7 @@ from .ledger import Ledger
 from .mcp import connect, execute
 from .policy import APPLY, HOLD, REFUSE, decide
 from .remedy import Proposal, propose
+from .usage import CallStats, format_summary, summarize
 
 
 def _note(message: str) -> None:
@@ -78,52 +79,64 @@ async def cmd_fix(cfg: Config, args: argparse.Namespace) -> int:
     _note(f"{len(findings)} finding(s) to propose + judge.")
     approved: list[tuple[Finding, Proposal]] = []
     tally: Counter = Counter()
+    run_calls: list[CallStats] = []
 
-    for f in findings:
-        try:
-            proposal = propose(f, cfg.model)
-        except Exception as err:                        # a proposer failure is not a write
-            ledger.write("propose_failed", f, error=str(err)[:500])
-            _note(f"PROPOSE-FAILED {f.entity_name}: {err}")
-            tally[f"{f.kind}:error"] += 1
-            continue
+    try:
+        for f in findings:
+            calls: list[CallStats] = []                     # what this finding's decision cost
+            try:
+                try:
+                    proposal = propose(f, cfg.model, calls)
+                except Exception as err:                        # a proposer failure is not a write
+                    ledger.write("propose_failed", f, error=str(err)[:500],
+                                 usage=[c.to_dict() for c in calls])
+                    _note(f"PROPOSE-FAILED {f.entity_name}: {err}")
+                    tally[f"{f.kind}:error"] += 1
+                    continue
 
-        from .judge import JudgeError, judge            # late import: scan needs no API key
+                from .judge import JudgeError, judge            # late import: scan needs no API key
 
-        try:
-            verdict = judge(f, proposal, cfg.model)
-        except JudgeError as err:
-            # No verdict means no write. Recorded distinctly from a refusal so
-            # an auditor can tell "the gate said no" from "the gate never ran".
-            ledger.write("judge_failed", f, proposal=proposal.to_dict(), error=str(err)[:500])
-            _note(f"JUDGE-FAILED {f.entity_name}: {err}")
-            tally[f"{f.kind}:judge_failed"] += 1
-            continue
+                try:
+                    verdict = judge(f, proposal, cfg.model, record_usage=calls)
+                except Exception as err:
+                    # No verdict means no write. Recorded distinctly from a refusal so
+                    # an auditor can tell "the gate said no" from "the gate never ran".
+                    ledger.write("judge_failed", f, proposal=proposal.to_dict(), error=str(err)[:500],
+                                 usage=[c.to_dict() for c in calls])
+                    if not isinstance(err, JudgeError):
+                        raise           # an API error still ends the run, once it is recorded
+                    _note(f"JUDGE-FAILED {f.entity_name}: {err}")
+                    tally[f"{f.kind}:judge_failed"] += 1
+                    continue
 
-        disposition = decide(verdict.approved, verdict.confidence, args.floor)
-        ledger.write(
-            "decided", f,
-            proposal=proposal.to_dict(),
-            verdict=verdict.model_dump(),
-            disposition=disposition.action,
-            disposition_reason=disposition.reason,
-            confidence_floor=args.floor,
-            mode="apply" if args.apply else "dry-run",
-        )
-        mark = {APPLY: "APPROVED", REFUSE: "REJECTED", HOLD: "HELD    "}[disposition.action]
-        tally[f"{f.kind}:{disposition.action}"] += 1
-        print(f"[{mark} {verdict.confidence:.2f}] {f.kind} {f.entity_name}: {proposal.summary[:110]}")
-        if disposition.held:
-            print(f"    held: {disposition.reason}")
-            print(f"    judge: {verdict.rationale[:220]}")
-        elif not verdict.approved:
-            print(f"    judge: {verdict.rationale[:220]}")
-        else:
-            approved.append((f, proposal))
-
-    _note("")
-    for key in sorted(tally):
-        _note(f"  {key:34s} {tally[key]}")
+                disposition = decide(verdict.approved, verdict.confidence, args.floor)
+                ledger.write(
+                    "decided", f,
+                    proposal=proposal.to_dict(),
+                    verdict=verdict.model_dump(),
+                    usage=[c.to_dict() for c in calls],
+                    disposition=disposition.action,
+                    disposition_reason=disposition.reason,
+                    confidence_floor=args.floor,
+                    mode="apply" if args.apply else "dry-run",
+                )
+                mark = {APPLY: "APPROVED", REFUSE: "REJECTED", HOLD: "HELD    "}[disposition.action]
+                tally[f"{f.kind}:{disposition.action}"] += 1
+                print(f"[{mark} {verdict.confidence:.2f}] {f.kind} {f.entity_name}: {proposal.summary[:110]}")
+                if disposition.held:
+                    print(f"    held: {disposition.reason}")
+                    print(f"    judge: {verdict.rationale[:220]}")
+                elif not verdict.approved:
+                    print(f"    judge: {verdict.rationale[:220]}")
+                else:
+                    approved.append((f, proposal))
+            finally:
+                run_calls += calls          # every call this finding made, however it ended
+    finally:
+        _note("")
+        for key in sorted(tally):
+            _note(f"  {key:34s} {tally[key]}")
+        _note(format_summary(summarize(run_calls)))   # printed even when the run aborts
 
     if not args.apply:
         _note(f"\ndry-run: {len(approved)} approved fix(es) NOT applied. Re-run with --apply.")
