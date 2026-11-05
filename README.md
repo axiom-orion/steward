@@ -130,7 +130,7 @@ response's own usage block (`src/steward/usage.py`):
   and p50/p95 latency, and writes each judgement's usage into `evals/results.jsonl`.
 - **`steward fix`** writes each decision's usage into the ledger, next to the
   verdict it paid for: one judge call, plus a drafter call for a drafted
-  description. It prints the run's total, even when an API error ends the run.
+  description. It prints the run's total, even when an API error or Ctrl-C ends the run.
 
 Uncached input, cache writes (1.25x input for the 5-minute TTL, 2x for 1-hour),
 cache reads and output are each priced at their own rate, with thinking counted
@@ -141,7 +141,8 @@ What the cost leaves out is counted, not hidden:
 - **Unpriced calls:** any other model, or a response served in fast mode or at
   another service tier.
 - **Failed calls:** a call that raised (an API error, or a verdict cut off
-  mid-sentence) returns no usage, so it is counted with its wall time but no cost.
+  mid-sentence) yields no usage the SDK hands back, so it is counted with its
+  wall time but no cost.
 
 Latency is end-to-end wall time per call, including the SDK's own retries.
 
@@ -157,7 +158,7 @@ does not trust it, that nothing was written behind the gate's back.
 
 ```bash
 uv venv && uv pip install -e . pytest
-pytest                          # 64 offline tests, no DataHub or API key needed
+pytest                          # 67 offline tests, no DataHub or API key needed
 ```
 
 ## Reuse disclosure

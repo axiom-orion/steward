@@ -70,6 +70,7 @@ def test_call_stats_reads_the_ttl_breakdown_and_the_serving_model():
     (None, (700, 0)),                                                   # no breakdown: default TTL
     (SimpleNamespace(ephemeral_5m_input_tokens=0, ephemeral_1h_input_tokens=0), (700, 0)),
     (SimpleNamespace(ephemeral_5m_input_tokens=0, ephemeral_1h_input_tokens=300), (400, 300)),
+    (SimpleNamespace(ephemeral_5m_input_tokens=0, ephemeral_1h_input_tokens=900), (0, 700)),  # clamped
 ])
 def test_the_cache_write_total_is_authoritative_and_split_by_ttl(breakdown, expected):
     stats = call_stats(_response(VERDICT, _usage(cache_creation=700, breakdown=breakdown)), MODEL, 1.0)
@@ -207,6 +208,28 @@ def test_an_api_error_is_recorded_and_the_run_total_still_prints(tmp_path, capsy
     assert records[1]["usage"][0]["measured"] is False
     err = capsys.readouterr().err
     assert "model calls      2:" in err and "1 failed with no usage returned" in err
+
+
+def test_an_interrupt_still_counts_the_calls_the_finding_had_made(tmp_path, capsys):
+    client = Mock()
+    client.messages.parse.side_effect = [
+        _response(Draft(description="Orders.", basis=["name"])), KeyboardInterrupt()]
+    with pytest.raises(KeyboardInterrupt):
+        _fix(tmp_path, [_finding("missing_description")], client)
+    assert "model calls      2:" in capsys.readouterr().err   # the paid drafter call, and the cut one
+
+
+def test_a_failed_draft_records_its_usage_in_the_ledger(tmp_path):
+    from pydantic import ValidationError
+    try:
+        Draft.model_validate({})
+    except ValidationError as err:
+        invalid = err
+    client = Mock()
+    client.messages.parse.side_effect = invalid
+    assert _fix(tmp_path, [_finding("missing_description")], client)[0] == 0
+    failed = _records(tmp_path / "ledger.jsonl")[0]
+    assert failed["event"] == "propose_failed" and failed["usage"][0]["measured"] is False
 
 
 def test_the_eval_records_each_judgement_s_own_usage(tmp_path, monkeypatch):

@@ -147,7 +147,7 @@ def _parse(sink: list[CallStats] | None, model: str, **request):
     started = time.perf_counter()
     try:
         response = api.messages.parse(model=model, **request)
-    except Exception:
+    except BaseException:                     # an API error, a bad verdict, or Ctrl-C mid-call
         if sink is not None:
             sink.append(CallStats(model=model, latency_s=time.perf_counter() - started, measured=False))
         raise

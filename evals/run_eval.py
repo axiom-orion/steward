@@ -123,7 +123,7 @@ def main() -> int:
                 _note(f"[{flag}] {case.name:22s} expected={'approve' if case.expected_approved else 'reject ':>7} "
                       f"got={approvals}{stability}")
 
-    except Exception:
+    except BaseException:                         # an API error, or Ctrl-C
         _note(format_summary(summarize(calls)))   # what the aborted run had spent
         raise
     _report(results, args.repeats, time.time() - started, out_path, summarize(calls))

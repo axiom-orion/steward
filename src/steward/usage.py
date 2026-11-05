@@ -98,8 +98,9 @@ def call_stats(response: Any, model: str, latency_s: float) -> CallStats:
     served = getattr(response, "model", None)
     # The total is authoritative; the breakdown says how much of it was 1-hour.
     # Without one, every write was at the default 5-minute TTL.
-    write_1h = _count(getattr(usage, "cache_creation", None), "ephemeral_1h_input_tokens")
-    write_5m = max(_count(usage, "cache_creation_input_tokens") - write_1h, 0)
+    total = _count(usage, "cache_creation_input_tokens")
+    write_1h = min(_count(getattr(usage, "cache_creation", None), "ephemeral_1h_input_tokens"), total)
+    write_5m = total - write_1h
     speed, service_tier = getattr(usage, "speed", None), getattr(usage, "service_tier", None)
     tier = ("fast" if speed == "fast"
             else service_tier if isinstance(service_tier, str) else STANDARD_TIER)
