@@ -131,10 +131,10 @@ def _tag_proposal(f: Finding) -> Proposal:
     )
 
 
-def _description_proposal(f: Finding, model: str) -> Proposal:
+def _description_proposal(f: Finding, model: str, record_usage: list | None = None) -> Proposal:
     from .judge import draft_description      # imported late so scan needs no API key
 
-    draft = draft_description(f, model)
+    draft = draft_description(f, model, record_usage)
     return Proposal(
         summary=draft.description,
         actions=[Action(tool="update_description", args={
@@ -147,9 +147,11 @@ def _description_proposal(f: Finding, model: str) -> Proposal:
     )
 
 
-def propose(f: Finding, model: str) -> Proposal:
+def propose(f: Finding, model: str, record_usage: list | None = None) -> Proposal:
+    """A proposal for one finding. Only a drafted description calls a model; with
+    `record_usage`, that call's usage is appended to it (see steward.usage)."""
     if f.kind == "missing_description":
-        return _description_proposal(f, model)
+        return _description_proposal(f, model, record_usage)
     if f.kind == "missing_owner":
         return _owner_proposal(f)
     if f.kind == "missing_domain":

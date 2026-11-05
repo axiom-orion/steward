@@ -15,11 +15,14 @@ statistic or a profiling annotation copied across platforms looks like diligent
 governance and is simply false.
 """
 
+import time
+
 from anthropic import Anthropic
 from pydantic import BaseModel, Field, ValidationError
 
 from .detectors import Finding
 from .remedy import Proposal
+from .usage import CallStats, call_stats
 
 # Verdicts on a contested write run long. At 2000 the JSON gets cut mid-string
 # and parsing dies, which took down a whole eval run — the gate has to be able
@@ -136,9 +139,29 @@ def _render_evidence(finding: Finding) -> str:
     return "\n".join(lines)
 
 
-def draft_description(finding: Finding, model: str) -> Draft:
-    response = client().messages.parse(
-        model=model,
+def _parse(sink: list[CallStats] | None, model: str, **request):
+    """`client().messages.parse`, timed and, with a `sink`, recorded. A call that
+    raises is recorded as unmeasured -- its wall time, no usage -- and the error
+    propagates. The client is built before the clock starts."""
+    api = client()
+    started = time.perf_counter()
+    try:
+        response = api.messages.parse(model=model, **request)
+    except Exception:
+        if sink is not None:
+            sink.append(CallStats(model=model, latency_s=time.perf_counter() - started, measured=False))
+        raise
+    if sink is not None:
+        sink.append(call_stats(response, model, time.perf_counter() - started))
+    return response
+
+
+def draft_description(finding: Finding, model: str,
+                      record_usage: list[CallStats] | None = None) -> Draft:
+    """Draft a description. With `record_usage`, the call's tokens, cost and
+    latency are appended to it (see _parse)."""
+    response = _parse(
+        record_usage, model,
         max_tokens=MAX_TOKENS,
         thinking={"type": "adaptive"},
         system=DRAFTER_SYSTEM,
@@ -151,12 +174,17 @@ def draft_description(finding: Finding, model: str) -> Draft:
     return response.parsed_output
 
 
-def judge(finding: Finding, proposal: Proposal, model: str) -> Verdict:
+def judge(finding: Finding, proposal: Proposal, model: str,
+          record_usage: list[CallStats] | None = None) -> Verdict:
+    """The judge's verdict on one proposal. With `record_usage`, the call's tokens,
+    cost and latency are appended to it. A verdict that fails to parse raises
+    JudgeError and is recorded as unmeasured: the SDK returns no usage to read, so
+    the summary counts the call but leaves it out of the cost (see _parse)."""
     system = DRAFT_JUDGE_SYSTEM if proposal.origin == "drafted" else PROPAGATION_JUDGE_SYSTEM
     writes = "\n".join(f"  {a.tool}({a.args})" for a in proposal.actions)
     try:
-        response = client().messages.parse(
-            model=model,
+        response = _parse(
+            record_usage, model,
             max_tokens=MAX_TOKENS,
             thinking={"type": "adaptive"},
             system=system,

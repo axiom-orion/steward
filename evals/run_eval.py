@@ -12,6 +12,10 @@ Two questions, because they fail differently:
                off a single run. Reported per case, so an unstable case is
                named rather than averaged away.
 
+  cost         What the gate costs to run: tokens, dollars per judgement and
+               latency percentiles, from each response's own usage block
+               (steward/usage.py). Each judgement's record carries its usage.
+
     python -m evals.run_eval --repeats 3
 
 Requires ANTHROPIC_API_KEY. No DataHub instance — the corpus is frozen in
@@ -27,6 +31,7 @@ from collections import Counter
 from pathlib import Path
 
 from steward.config import Config
+from steward.usage import CallStats, format_summary, summarize
 
 from .cases import CASES, load_snapshot
 
@@ -52,73 +57,81 @@ def main() -> int:
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     results: list[dict] = []
+    calls: list[CallStats] = []
     started = time.time()
 
-    with out_path.open("w", encoding="utf-8") as sink:
-        for case in cases:
-            finding, proposal = case.build(snapshot)
-            verdicts = []
-            errors = 0
-            for i in range(args.repeats):
-                try:
-                    verdict = judge(finding, proposal, cfg.model)
-                except JudgeError as err:
-                    # Not a verdict — excluded from accuracy and counted openly,
-                    # rather than folded in as a refusal it never issued.
-                    errors += 1
-                    sink.write(json.dumps({"case": case.name, "run": i, "error": str(err)[:400]}) + "\n")
+    try:
+        with out_path.open("w", encoding="utf-8") as sink:
+            for case in cases:
+                finding, proposal = case.build(snapshot)
+                verdicts = []
+                errors = 0
+                for i in range(args.repeats):
+                    spent = len(calls)
+                    try:
+                        verdict = judge(finding, proposal, cfg.model, record_usage=calls)
+                    except JudgeError as err:
+                        # Not a verdict — excluded from accuracy and counted openly,
+                        # rather than folded in as a refusal it never issued.
+                        errors += 1
+                        sink.write(json.dumps({"case": case.name, "run": i, "error": str(err)[:400]}) + "\n")
+                        sink.flush()
+                        _note(f"     judge error on {case.name} run {i}: {str(err)[:120]}")
+                        continue
+                    verdicts.append(verdict)
+                    record = {
+                        "case": case.name,
+                        "run": i,
+                        "expected_approved": case.expected_approved,
+                        "approved": verdict.approved,
+                        "correct": verdict.approved == case.expected_approved,
+                        "confidence": verdict.confidence,
+                        "rationale": verdict.rationale,
+                        "kind": finding.kind,
+                        "proposal": proposal.summary,
+                        "synthetic": case.synthetic,
+                        "usage": [c.to_dict() for c in calls[spent:]],
+                    }
+                    sink.write(json.dumps(record, ensure_ascii=False) + "\n")
                     sink.flush()
-                    _note(f"     judge error on {case.name} run {i}: {str(err)[:120]}")
+
+                if not verdicts:
+                    _note(f"[ERR ] {case.name:22s} no usable verdict in {args.repeats} attempt(s)")
+                    results.append({
+                        "case": case.name, "expected": case.expected_approved, "majority": None,
+                        "correct": False, "unanimous": False, "approvals": [], "errors": errors,
+                        "mean_confidence": 0.0, "synthetic": case.synthetic, "why": case.why,
+                    })
                     continue
-                verdicts.append(verdict)
-                record = {
-                    "case": case.name,
-                    "run": i,
-                    "expected_approved": case.expected_approved,
-                    "approved": verdict.approved,
-                    "correct": verdict.approved == case.expected_approved,
-                    "confidence": verdict.confidence,
-                    "rationale": verdict.rationale,
-                    "kind": finding.kind,
-                    "proposal": proposal.summary,
-                    "synthetic": case.synthetic,
-                }
-                sink.write(json.dumps(record, ensure_ascii=False) + "\n")
-                sink.flush()
 
-            if not verdicts:
-                _note(f"[ERR ] {case.name:22s} no usable verdict in {args.repeats} attempt(s)")
+                approvals = [v.approved for v in verdicts]
+                majority = sum(approvals) > len(approvals) / 2
                 results.append({
-                    "case": case.name, "expected": case.expected_approved, "majority": None,
-                    "correct": False, "unanimous": False, "approvals": [], "errors": errors,
-                    "mean_confidence": 0.0, "synthetic": case.synthetic, "why": case.why,
+                    "errors": errors,
+                    "case": case.name,
+                    "expected": case.expected_approved,
+                    "majority": majority,
+                    "correct": majority == case.expected_approved,
+                    "unanimous": len(set(approvals)) == 1,
+                    "approvals": approvals,
+                    "mean_confidence": statistics.mean(v.confidence for v in verdicts),
+                    "synthetic": case.synthetic,
+                    "why": case.why,
                 })
-                continue
+                flag = "ok " if results[-1]["correct"] else "MISS"
+                stability = "" if results[-1]["unanimous"] else "  <- FLIPPED"
+                _note(f"[{flag}] {case.name:22s} expected={'approve' if case.expected_approved else 'reject ':>7} "
+                      f"got={approvals}{stability}")
 
-            approvals = [v.approved for v in verdicts]
-            majority = sum(approvals) > len(approvals) / 2
-            results.append({
-                "errors": errors,
-                "case": case.name,
-                "expected": case.expected_approved,
-                "majority": majority,
-                "correct": majority == case.expected_approved,
-                "unanimous": len(set(approvals)) == 1,
-                "approvals": approvals,
-                "mean_confidence": statistics.mean(v.confidence for v in verdicts),
-                "synthetic": case.synthetic,
-                "why": case.why,
-            })
-            flag = "ok " if results[-1]["correct"] else "MISS"
-            stability = "" if results[-1]["unanimous"] else "  <- FLIPPED"
-            _note(f"[{flag}] {case.name:22s} expected={'approve' if case.expected_approved else 'reject ':>7} "
-                  f"got={approvals}{stability}")
-
-    _report(results, args.repeats, time.time() - started, out_path)
+    except Exception:
+        _note(format_summary(summarize(calls)))   # what the aborted run had spent
+        raise
+    _report(results, args.repeats, time.time() - started, out_path, summarize(calls))
     return 0 if all(r["correct"] for r in results) else 1
 
 
-def _report(results: list[dict], repeats: int, elapsed: float, out_path: Path) -> None:
+def _report(results: list[dict], repeats: int, elapsed: float, out_path: Path,
+            usage: dict | None = None) -> None:
     total = len(results)
     correct = sum(r["correct"] for r in results)
     unanimous = sum(r["unanimous"] for r in results)
@@ -135,6 +148,8 @@ def _report(results: list[dict], repeats: int, elapsed: float, out_path: Path) -
     print(f"unanimous        {unanimous}/{total}" + ("" if unanimous == total else "   <- the rest flipped between runs"))
     print(f"bad writes caught {len(caught)}/{len(should_reject)}   (refusals the gate exists for)")
     print(f"good writes kept  {len(approved)}/{len(should_approve)}   (fixes it should not block)")
+    if usage is not None:
+        print(format_summary(usage))
 
     if len(should_reject):
         missed = [r["case"] for r in should_reject if r["majority"]]

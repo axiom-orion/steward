@@ -122,6 +122,32 @@ it makes the gate hard to predict across sibling tables. Its confidence on that
 verdict is 0.61 against 0.88 elsewhere — low confidence is a usable signal for
 routing a decision to a human.
 
+### What the gate costs
+
+Every judge and drafter call records its tokens, dollars and latency from the
+response's own usage block (`src/steward/usage.py`):
+- **The eval** prints the run's total and per-call cost (one call per judgement)
+  and p50/p95 latency, and writes each judgement's usage into `evals/results.jsonl`.
+- **`steward fix`** writes each decision's usage into the ledger, next to the
+  verdict it paid for: one judge call, plus a drafter call for a drafted
+  description. It prints the run's total, even when an API error ends the run.
+
+Uncached input, cache writes (1.25x input for the 5-minute TTL, 2x for 1-hour),
+cache reads and output are each priced at their own rate, with thinking counted
+as output. The prices are Anthropic's standard-tier list prices as of 2026-10-06
+for the models in `PRICES`.
+
+What the cost leaves out is counted, not hidden:
+- **Unpriced calls:** any other model, or a response served in fast mode or at
+  another service tier.
+- **Failed calls:** a call that raised (an API error, or a verdict cut off
+  mid-sentence) returns no usage, so it is counted with its wall time but no cost.
+
+Latency is end-to-end wall time per call, including the SDK's own retries.
+
+The run in the table above predates this measurement, so its records carry no
+usage. The next `python -m evals.run_eval` run with a key produces the figures.
+
 Separately, `audit_ledger` checks the property that must hold regardless of the
 judge's opinions: every applied write carries an approving verdict for that exact
 set of actions. It is what lets the agent prove after the fact, to someone who
@@ -131,7 +157,7 @@ does not trust it, that nothing was written behind the gate's back.
 
 ```bash
 uv venv && uv pip install -e . pytest
-pytest                          # 44 offline tests, no DataHub or API key needed
+pytest                          # 64 offline tests, no DataHub or API key needed
 ```
 
 ## Reuse disclosure
